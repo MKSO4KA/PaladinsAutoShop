@@ -1,228 +1,200 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
-; ==================================================================================================
-; === CONFIGURATION (Все статические значения и настройки) ===
-; ==================================================================================================
+; --- Глобальные переменные ---
 
-; --- Координаты ---
-; Таблица ВСЕХ возможных координат в сетке
-static readonly COORDS := [
+; 1. Таблица ВСЕХ возможных координат в сетке
+global Coords := [
     [[300, 380],  [600, 380],  [825, 380],  [1111, 380], [1350, 380]],
     [[300, 600],  [600, 600],  [825, 600],  [1111, 600], [1350, 600]],
     [[300, 850],  [600, 850],  [825, 850],  [1111, 850], [1350, 850]],
     [[300, 1111], [600, 1111], [825, 1111], [1111, 1111], [1350, 1111]]
 ]
-; Координаты для кликов выбора улучшений (1, 2, 3)
-static readonly MAIN_CLICK_COORDS := [
-    {x: 2235, y: 570},  ; Режим 1
-    {x: 2235, y: 820},  ; Режим 2
-    {x: 2235, y: 1080}  ; Режим 3
-]
-; Координаты по умолчанию для 4 ячеек Numpad
-static readonly DEFAULT_NUMPAD_COORDS := [
-    {x: 1380, y: 380},
-    {x: 1110, y: 373},
-    {x: 1088, y: 1114},
-    {x: 865,  y: 899}
-]
 
-; --- Задержки (в миллисекундах) ---
-static readonly DELAY_KEY_PRESS := 50          ; Задержка между нажатием и отпусканием клавиши
-static readonly DELAY_MOUSE_MOVE := 50         ; Задержка после перемещения мыши перед кликом
-static readonly DELAY_INVENTORY_OPEN := 200    ; Пауза после открытия инвентаря
-static readonly DELAY_BEFORE_INVENTORY_CLOSE := 100 ; Пауза перед закрытием инвентаря
-
-; --- Клавиши и Настройки ---
-static readonly KEY_INVENTORY := "i"           ; Клавиша для открытия/закрытия инвентаря
-static readonly NUM_OF_TARGETS := 4            ; Количество отслеживаемых ячеек (Numpad 1-4)
-
-; --- Настройки GUI ---
-static readonly GUI_TITLE := "Выберите 4 клетки"
-static readonly GUI_BTN_WIDTH := 120
-static readonly GUI_BTN_HEIGHT := 40
-static readonly GUI_MARGIN := 10
-static readonly BUTTON_NAMES := [
+; === НОВЫЙ МАССИВ С НАЗВАНИЯМИ КНОПОК ===
+global ButtonNames := [
     "АнтиКонтроль", "5сЩит", "ЛучшиеЩиты", "Анти АтакиПоОбласти", "Анти прямые",
     "+Скорость", "ДЕньги", "+КОнница", "ПерезарядкаСупера", "-кд",
     "+регенВнеБоя", "Вампирка", "+ХилОтХилок", "+МаксХп", "+ХилОтКилов",
     "+дмгПоТурелям", "-кдПерезарядки", "Спид+Прыжок", "+дмгПослеКила", "+уронПОЩитам"
 ]
 
+; 2. Массив ТЕКУЩИХ координат для Numpad 1-4.
+global NumpadCoords := [
+    {x: 1380, y: 380},   ; Координаты для Numpad1 по умолчанию
+    {x: 1110, y: 373},   ; Координаты для Numpad2 по умолчанию
+    {x: 1088, y: 1114},  ; Координаты для Numpad3 по умолчанию
+    {x: 865,  y: 899}    ; Координаты для Numpad4 по умолчанию
+]
 
-; ==================================================================================================
-; === STATE VARIABLES (Глобальные переменные, изменяемые в процессе работы) ===
-; ==================================================================================================
+; 3. Переменные состояния для кликов
+global k_1 := 1, k_2 := 1, k_3 := 1, k_4 := 1
 
-; Массив ТЕКУЩИХ координат для Numpad 1-4. Клонируем из констант, чтобы не изменять оригинал.
-global NumpadCoords := DEFAULT_NUMPAD_COORDS.Clone()
-
-; Массив счетчиков для последовательных кликов (замена k_1, k_2, k_3, k_4)
-global ClickCounters := []
-
-; Вспомогательные переменные для GUI
+; 4. Вспомогательные переменные для GUI
 global SelectedCells := []
 global MyGui
 
+;5 Задержки для кликов
+global KeyDelay := 10
 
-; ==================================================================================================
-; === SCRIPT START (Инициализация и запуск) ===
-; ==================================================================================================
+; --- Запуск скрипта ---
+ShowGrid()
 
-Init()
+; ======================================================================
+; === СТАТИЧНЫЕ ГОРЯЧИЕ КЛАВИШИ ===
+; ======================================================================
 
-Init() {
-    ; Инициализируем массив счетчиков
-    loop NUM_OF_TARGETS
-        ClickCounters.Push(1)
-    
-    SetupHotkeys()
-    ShowGrid()
+Numpad1:: {
+    global k_1
+    PerformFullSequence(1, [k_1])
+    k_1 := Mod(k_1, 3) + 1
+}
+Numpad2:: {
+    global k_2
+    PerformFullSequence(2, [k_2])
+    k_2 := Mod(k_2, 3) + 1
+}
+Numpad3:: {
+    global k_3
+    PerformFullSequence(3, [k_3])
+    k_3 := Mod(k_3, 3) + 1
+}
+Numpad4:: {
+    global k_4
+    PerformFullSequence(4, [k_4])
+    k_4 := Mod(k_4, 3) + 1
 }
 
-
-; ==================================================================================================
-; === HOTKEY SETUP & CALLBACKS (Настройка горячих клавиш и их обработчики) ===
-; ==================================================================================================
-
-SetupHotkeys() {
-    ; --- Динамическое создание горячих клавиш для Numpad 1-4 ---
-    loop NUM_OF_TARGETS {
-        n := A_Index ; Захватываем текущее значение A_Index для использования в лямбда-функции
-
-        ; Обычное нажатие (циклический клик 1-2-3)
-        Hotkey('Numpad' n, (hk, ctx) => {
-            PerformFullSequence(n, [ClickCounters[n]])
-            ClickCounters[n] := Mod(ClickCounters[n], 3) + 1
-        })
-
-        ; Ctrl + Numpad (тройной клик 1-2-3)
-        Hotkey('^Numpad' n, (*) => PerformFullSequence(n, [1, 2, 3]))
-
-        ; Alt + Numpad (двойной клик 1-2)
-        Hotkey('!Numpad' n, (*) => PerformFullSequence(n, [1, 2]))
-    }
-
-    ; --- Статичные горячие клавиши ---
-    Numpad7::SetAllModes(1)
-    Numpad8::SetAllModes(2)
-    Numpad9::SetAllModes(3)
-    ^!r::ShowGrid()
+Numpad7:: {
+    global k_1 := 1, k_2 := 1, k_3 := 1, k_4 := 1
+}
+Numpad8:: {
+    global k_1 := 2, k_2 := 2, k_3 := 2, k_4 := 2
+}
+Numpad9:: {
+    global k_1 := 3, k_2 := 3, k_3 := 3, k_4 := 3
 }
 
-; Сбрасывает все счетчики в одно состояние
-SetAllModes(mode) {
-    global ClickCounters
-    loop NUM_OF_TARGETS {
-        ClickCounters[A_Index] := mode
-    }
-    ToolTip("Все режимы установлены на: " mode, 1000)
-}
+^!r::ShowGrid()
 
+; ======================================================================
+; === НОВЫЕ ГОРЯЧИЕ КЛАВИШИ (ТРОЙНОЙ КЛИК ПО Ctrl+Numpad) ===
+; ======================================================================
 
-; ==================================================================================================
-; === CORE LOGIC & HELPER FUNCTIONS (Основная логика и вспомогательные функции) ===
-; ==================================================================================================
+^Numpad1:: PerformFullSequence(1, [1, 2, 3])
+^Numpad2:: PerformFullSequence(2, [1, 2, 3])
+^Numpad3:: PerformFullSequence(3, [1, 2, 3])
+^Numpad4:: PerformFullSequence(4, [1, 2, 3])
 
-; Выполняет полную последовательность действий: открыть инвентарь, кликнуть, закрыть.
+; ======================================================================
+; === НОВЫЕ ГОРЯЧИЕ КЛАВИШИ (Двойной КЛИК ПО ALT+Numpad) ===
+; ======================================================================
+
+!Numpad1:: PerformFullSequence(1, [1, 2])
+!Numpad2:: PerformFullSequence(2, [1, 2])
+!Numpad3:: PerformFullSequence(3, [1, 2])
+!Numpad4:: PerformFullSequence(4, [1, 2])
+
+; ======================================================================
+; === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (GUI и клики) ===
+; ======================================================================
+
+; === ИЗМЕНЕННАЯ УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ===
 PerformFullSequence(numpadIndex, modes) {
-    SetKeyDelay(DELAY_KEY_PRESS)
+    global NumpadCoords
+    global KeyDelay
+    ; Устанавливаем небольшую задержку между нажатием и отпусканием клавиши.
+    ; Это критически важно для SendEvent в играх.
+    SetKeyDelay(KeyDelay)
     
-    Send(KEY_INVENTORY)
-    Sleep(DELAY_INVENTORY_OPEN)
+    ; 1. Открываем инвентарь через SendEvent
+    SendEvent("i")
+    Sleep(200) ; Пауза, чтобы инвентарь успел открыться
     
-    ClickAtCoords(NumpadCoords[numpadIndex].x, NumpadCoords[numpadIndex].y)
+    ; 2. Кликаем по основной ячейке
+    ClickAtCoords(NumpadCoords[numpadIndex].x, NumpadCoords[numpadIndex].y,KeyDelay)
     
+    ; 3. Выполняем все клики из переданного списка режимов
     for mode in modes {
-        MainClick(mode)
+        MainClick(mode,KeyDelay)
     }
     
-    Sleep(DELAY_BEFORE_INVENTORY_CLOSE)
-    Send(KEY_INVENTORY)
+    ; 4. Закрываем инвентарь через SendEvent
+    Sleep(100) ; Небольшая пауза перед закрытием
+    SendEvent("i")
 }
-
-; Выполняет основной клик по выбору улучшения
-MainClick(mode) {
-    coord := MAIN_CLICK_COORDS[mode]
-    ClickAtCoords(coord.x, coord.y)
-}
-
-; Перемещает мышь и кликает в указанных координатах
-ClickAtCoords(x, y) {
-    MouseMove(x, y, 0)
-    Sleep(DELAY_MOUSE_MOVE)
-    SendEvent("{LButton}")
-}
-
-
-; ==================================================================================================
-; === GUI FUNCTIONS (Функции для работы с графическим интерфейсом) ===
-; ==================================================================================================
 
 ShowGrid() {
-    global MyGui, SelectedCells
+    global MyGui, SelectedCells, ButtonNames
     SelectedCells := []
 
-    if WinExist(GUI_TITLE)
+    if WinExist("Выберите 4 клетки")
         MyGui.Destroy()
 
-    MyGui := Gui("+AlwaysOnTop -SysMenu", GUI_TITLE)
+    MyGui := Gui("+AlwaysOnTop -SysMenu", "Выберите 4 клетки")
     MyGui.OnEvent("Close", (*) => ExitApp())
 
+    margin := 10
+    btn_w := 120
+    btn_h := 40
+    
     name_index := 1
-    loop 4 { ; rows
+    loop 4 {
         j := A_Index
-        loop 5 { ; columns
+        loop 5 {
             i := A_Index
             
-            x_pos := GUI_MARGIN + (i - 1) * (GUI_BTN_WIDTH + GUI_MARGIN)
-            y_pos := GUI_MARGIN + (j - 1) * (GUI_BTN_HEIGHT + GUI_MARGIN)
+            x_pos := margin + (i - 1) * (btn_w + margin)
+            y_pos := margin + (j - 1) * (btn_h + margin)
             
-            options := "x" x_pos " y" y_pos " w" GUI_BTN_WIDTH " h" GUI_BTN_HEIGHT
+            options := "x" x_pos " y" y_pos " w" btn_w " h" btn_h
             
-            btn := MyGui.Add("Button", options, BUTTON_NAMES[name_index])
+            current_name := ButtonNames[name_index]
+            
+            btn := MyGui.Add("Button", options, current_name)
             btn.j := j
             btn.i := i
-            btn.OnEvent("Click", SelectCell)
+            btn.OnEvent("Click", (btnCtrl, info) => SelectCell(btnCtrl))
             
             name_index++
         }
     }
 
-    confirm_y := GUI_MARGIN + 4 * (GUI_BTN_HEIGHT + GUI_MARGIN)
-    confirmBtn := MyGui.Add("Button", "x" GUI_MARGIN " y" confirm_y " w" GUI_BTN_WIDTH " h" GUI_BTN_HEIGHT, "Подтвердить")
-    confirmBtn.OnEvent("Click", ConfirmSelection)
+    confirm_y := margin + 4 * (btn_h + margin)
+    confirmBtn := MyGui.Add("Button", "x" margin " y" confirm_y " w120 h40", "Подтвердить")
+    confirmBtn.OnEvent("Click", (*) => ConfirmSelection())
     
-    exit_x := GUI_MARGIN + GUI_BTN_WIDTH + GUI_MARGIN
-    exitBtn := MyGui.Add("Button", "x" exit_x " y" confirm_y " w" GUI_BTN_WIDTH " h" GUI_BTN_HEIGHT, "Выход")
+    exit_x := margin + 120 + margin
+    exitBtn := MyGui.Add("Button", "x" exit_x " y" confirm_y " w120 h40", "Выход")
     exitBtn.OnEvent("Click", (*) => ExitApp())
 
     MyGui.Show()
 }
 
-SelectCell(btnCtrl, info) {
-    global SelectedCells
+SelectCell(btnCtrl) {
+    global SelectedCells, Coords, ButtonNames
     j := btnCtrl.j
     i := btnCtrl.i
 
     for index, cell in SelectedCells {
         if (cell.j = j && cell.i = i) {
             SelectedCells.RemoveAt(index)
+            
             name_index := (j - 1) * 5 + i
-            btnCtrl.Text := BUTTON_NAMES[name_index]
+            btnCtrl.Text := ButtonNames[name_index]
+            
             UpdateSelectedButtonLabels()
             return
         }
     }
 
-    if (SelectedCells.Length >= NUM_OF_TARGETS) {
-        ToolTip("Уже выбрано максимальное количество ячеек (" NUM_OF_TARGETS ")", 1500)
+    if (SelectedCells.Length >= 4) {
         return
     }
 
     SelectedCells.Push({
         j: j, i: i,
-        x: COORDS[j][i][1], y: COORDS[j][i][2],
+        x: Coords[j][i][1], y: Coords[j][i][2],
         ctrl: btnCtrl
     })
     
@@ -236,15 +208,15 @@ UpdateSelectedButtonLabels() {
     }
 }
 
-ConfirmSelection(*) {
+ConfirmSelection() {
     global SelectedCells, MyGui, NumpadCoords
 
-    if (SelectedCells.Length != NUM_OF_TARGETS) {
-        MsgBox "Ошибка: Нужно выбрать ровно " NUM_OF_TARGETS " клетки.", "Неверный выбор", "Icon! 48"
+    if (SelectedCells.Length != 4) {
+        MsgBox "Ошибка: Нужно выбрать ровно 4 клетки.", "Неверный выбор", "Icon! 48"
         return
     }
 
-    loop NUM_OF_TARGETS {
+    loop 4 {
         n := A_Index
         selected_cell := SelectedCells[n]
         NumpadCoords[n].x := selected_cell.x
@@ -252,5 +224,18 @@ ConfirmSelection(*) {
     }
 
     MyGui.Destroy()
-    ToolTip("Координаты успешно обновлены!", 1500)
+}
+
+MainClick(mode, delay := 50) {
+    switch mode {
+        case 1: ClickAtCoords(2235, 570, delay)
+        case 2: ClickAtCoords(2235, 820, delay)
+        case 3: ClickAtCoords(2235, 1080, delay)
+    }
+}
+
+ClickAtCoords(x, y, delay := 50) {
+    MouseMove(x, y, 0)
+    Sleep(delay)
+    SendEvent("{LButton}")
 }
